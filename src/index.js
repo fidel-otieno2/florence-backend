@@ -208,6 +208,40 @@ app.post('/posts/:id/comments', authMiddleware, async (req, res) => {
   res.json({ comment: data });
 });
 
+/* ── GET MESSAGES ── */
+app.get('/messages', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('*')
+    .order('created_at', { ascending: true })
+    .limit(200);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ messages: data });
+});
+
+/* ── SEND MESSAGE ── */
+app.post('/messages', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
+    const { text } = req.body;
+    let mediaUrl = null, mediaType = null;
+    if (req.file) {
+      const result = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
+      mediaUrl  = result.secure_url;
+      mediaType = req.file.mimetype.startsWith('video') ? 'video' : 'image';
+    }
+    if (!text?.trim() && !mediaUrl) return res.status(400).json({ error: 'Empty message' });
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({ user_id: req.user.id, username: req.user.displayName, text: text?.trim() || null, media_url: mediaUrl, media_type: mediaType })
+      .select().single();
+    if (error) throw error;
+    res.json({ message: data });
+  } catch (err) {
+    console.error('POST /messages error:', JSON.stringify(err));
+    res.status(500).json({ error: err.message || 'Failed' });
+  }
+});
+
 /* ── DELETE COMMENT ── */
 app.delete('/comments/:id', authMiddleware, async (req, res) => {
   const { data: comment } = await supabase

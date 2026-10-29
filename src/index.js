@@ -84,7 +84,7 @@ function uploadToCloudinary(buffer, mimetype) {
     const resourceType = mimetype.startsWith('video') ? 'video' : 'image';
     console.log('Cloudinary upload attempt — cloud:', process.env.CLOUDINARY_CLOUD_NAME, 'key:', process.env.CLOUDINARY_API_KEY?.slice(0,6));
     const stream = cloudinary.uploader.upload_stream(
-      { folder: 'florence_fidel', resource_type: resourceType },
+      { resource_type: resourceType },
       (err, result) => err ? reject(err) : resolve(result)
     );
     stream.end(buffer);

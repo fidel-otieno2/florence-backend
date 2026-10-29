@@ -38,6 +38,28 @@ async function getAvatarUrl(userId) {
   return data?.avatar_url || null;
 }
 
+async function avatarMap() {
+  const { data } = await supabase.from('profiles').select('user_id, avatar_url');
+  const map = {};
+  (data || []).forEach(p => {
+    if (p?.user_id && p.avatar_url) {
+      map[p.user_id] = p.avatar_url;
+      avatarCache[p.user_id] = p.avatar_url;
+    }
+  });
+  return map;
+}
+
+function withAvatars(rows, map) {
+  return (rows || []).map(row => ({
+    ...row,
+    avatar_url: row.avatar_url || map[row.user_id] || null,
+    comments: Array.isArray(row.comments)
+      ? row.comments.map(c => ({ ...c, avatar_url: c.avatar_url || map[c.user_id] || null }))
+      : row.comments,
+  }));
+}
+
 function notifyOther(senderUserId, payload) {
   setImmediate(() => {
     pushToOther(senderUserId, payload).catch(err => console.error('push error:', err.message));
@@ -206,6 +228,7 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
       .single();
 
     if (error) throw error;
+    data.avatar_url = await getAvatarUrl(req.user.id);
     notifyOther(req.user.id, {
       title: `FloRish 🤍`,
       body: `${req.user.displayName} posted a new memory`,
@@ -226,7 +249,8 @@ app.get('/posts', authMiddleware, async (req, res) => {
     .order('created_at', { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ posts: data });
+  const map = await avatarMap();
+  res.json({ posts: withAvatars(data, map) });
 });
 
 /* ── DELETE POST ── */
@@ -337,7 +361,8 @@ app.get('/messages', authMiddleware, async (req, res) => {
     .order('created_at', { ascending: true })
     .limit(200);
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ messages: data });
+  const map = await avatarMap();
+  res.json({ messages: withAvatars(data, map) });
 });
 
 /* ── SEND MESSAGE ── */
@@ -356,6 +381,7 @@ app.post('/messages', authMiddleware, upload.single('file'), async (req, res) =>
       .insert({ user_id: req.user.id, username: req.user.displayName, text: text?.trim() || null, media_url: mediaUrl, media_type: mediaType })
       .select('*, message_reactions(*)').single();
     if (error) throw error;
+    data.avatar_url = await getAvatarUrl(req.user.id);
     const preview = data.text
       || (data.media_type === 'audio' ? '🎤 Sent a voice note' : data.media_type === 'video' ? '🎥 Sent a video' : '📸 Sent a photo');
     notifyOther(req.user.id, {

@@ -14,11 +14,7 @@ const app  = express();
 const PORT = process.env.PORT || 4000;
 
 /* ═══ CLOUDINARY ═══ */
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+cloudinary.config({ cloud_name: process.env.CLOUDINARY_CLOUD_NAME });
 
 /* ═══ SUPABASE ═══ */
 const supabase = createClient(
@@ -82,7 +78,8 @@ const upload = multer({
 function uploadToCloudinary(buffer, mimetype) {
   const resourceType = mimetype.startsWith('video') ? 'video' : 'image';
   const b64 = `data:${mimetype};base64,${buffer.toString('base64')}`;
-  return cloudinary.uploader.upload(b64, { resource_type: resourceType });
+  return cloudinary.uploader.unsigned_upload(b64, process.env.CLOUDINARY_UPLOAD_PRESET, { resource_type: resourceType })
+    .catch(err => { throw new Error(`Cloudinary: ${JSON.stringify(err.error || err)}`); });
 }
 
 /* ═══════════════════════════════════════════

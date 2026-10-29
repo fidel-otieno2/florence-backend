@@ -23,23 +23,52 @@ const supabase = createClient(
 );
 
 /* ═══ WEB PUSH ═══ */
-webpush.setVapidDetails(
-  'mailto:fidelmartins05@gmail.com',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  webpush.setVapidDetails('mailto:fidelmartins05@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
+}
+
+const avatarCache = {};
+
+async function getAvatarUrl(userId) {
+  if (avatarCache[userId]) return avatarCache[userId];
+  const { data } = await supabase.from('profiles').select('avatar_url').eq('user_id', userId).single();
+  if (data?.avatar_url) avatarCache[userId] = data.avatar_url;
+  return data?.avatar_url || null;
+}
+
+function notifyOther(senderUserId, payload) {
+  setImmediate(() => {
+    pushToOther(senderUserId, payload).catch(err => console.error('push error:', err.message));
+  });
+}
 
 async function pushToOther(senderUserId, payload) {
+  if (!VAPID_PUBLIC || !VAPID_PRIVATE) return;
   const otherId = senderUserId === 'fidel' ? 'florence' : 'fidel';
-  const { data } = await supabase.from('push_subscriptions').select('subscription').eq('user_id', otherId).single();
-  if (!data) return;
-  try {
-    await webpush.sendNotification(data.subscription, JSON.stringify(payload));
-  } catch (err) {
-    if (err.statusCode === 410) {
-      await supabase.from('push_subscriptions').delete().eq('user_id', otherId);
+  const [rowsResult, icon] = await Promise.all([
+    supabase.from('push_subscriptions').select('id, subscription').eq('user_id', otherId),
+    getAvatarUrl(senderUserId),
+  ]);
+  const rows = rowsResult.data;
+  if (!rows?.length) return;
+  const body = JSON.stringify({
+    ...payload,
+    icon: icon || payload.icon,
+    tag: `${payload.url || 'florish'}-${Date.now()}`,
+  });
+  await Promise.all(rows.map(async (row) => {
+    try {
+      await webpush.sendNotification(row.subscription, body, { urgency: 'high', TTL: 86400 });
+    } catch (err) {
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        await supabase.from('push_subscriptions').delete().eq('id', row.id);
+      } else {
+        console.error('push error:', err.statusCode, err.message);
+      }
     }
-  }
+  }));
 }
 
 /* ═══ USERS (no DB — hardcoded, only 2 accounts ever) ═══ */
@@ -53,8 +82,11 @@ app.set('trust proxy', 1);
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
-app.use(limiter);
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 800 });
+app.use((req, res, next) => {
+  if (req.path.startsWith('/push')) return next();
+  return limiter(req, res, next);
+});
 
 /* ═══ AUTH MIDDLEWARE ═══ */
 function authMiddleware(req, res, next) {
@@ -75,11 +107,22 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
+function cloudinaryType(mimetype) {
+  if (mimetype.startsWith('video') || mimetype.startsWith('audio')) return 'video';
+  return 'image';
+}
+
+function mediaKind(mimetype) {
+  if (mimetype.startsWith('audio')) return 'audio';
+  if (mimetype.startsWith('video')) return 'video';
+  return 'image';
+}
+
 function uploadToCloudinary(buffer, mimetype) {
-  const resourceType = mimetype.startsWith('video') ? 'video' : 'image';
   const b64 = `data:${mimetype};base64,${buffer.toString('base64')}`;
-  return cloudinary.uploader.unsigned_upload(b64, process.env.CLOUDINARY_UPLOAD_PRESET, { resource_type: resourceType })
-    .catch(err => { throw new Error(`Cloudinary: ${JSON.stringify(err.error || err)}`); });
+  return cloudinary.uploader.unsigned_upload(b64, process.env.CLOUDINARY_UPLOAD_PRESET, {
+    resource_type: cloudinaryType(mimetype),
+  }).catch(err => { throw new Error(`Cloudinary: ${JSON.stringify(err.error || err)}`); });
 }
 
 /* ═══════════════════════════════════════════
@@ -94,8 +137,17 @@ app.get('/push/vapid-key', (_, res) => {
 /* ── SAVE PUSH SUBSCRIPTION ── */
 app.post('/push/subscribe', authMiddleware, async (req, res) => {
   const { subscription } = req.body;
-  if (!subscription) return res.status(400).json({ error: 'No subscription' });
-  await supabase.from('push_subscriptions').upsert({ user_id: req.user.id, subscription }, { onConflict: 'user_id' });
+  if (!subscription?.endpoint) return res.status(400).json({ error: 'No subscription' });
+  const { data: existing } = await supabase
+    .from('push_subscriptions')
+    .select('id')
+    .eq('subscription->>endpoint', subscription.endpoint)
+    .maybeSingle();
+  if (existing) {
+    await supabase.from('push_subscriptions').update({ user_id: req.user.id, subscription }).eq('id', existing.id);
+  } else {
+    await supabase.from('push_subscriptions').insert({ user_id: req.user.id, subscription });
+  }
   res.json({ ok: true });
 });
 
@@ -137,7 +189,7 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
       const result = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
       mediaUrl  = result.secure_url;
       publicId  = result.public_id;
-      mediaType = req.file.mimetype.startsWith('video') ? 'video' : 'image';
+      mediaType = mediaKind(req.file.mimetype);
     }
 
     const { data, error } = await supabase
@@ -154,10 +206,10 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
       .single();
 
     if (error) throw error;
-    pushToOther(req.user.id, {
+    notifyOther(req.user.id, {
       title: `FloRish 🤍`,
       body: `${req.user.displayName} posted a new memory`,
-      url: '/gallery'
+      url: '/gallery',
     });
     res.json({ post: data });
   } catch (err) {
@@ -217,6 +269,11 @@ app.post('/posts/:id/react', authMiddleware, async (req, res) => {
     user_id: req.user.id,
     username: req.user.displayName,
   });
+  notifyOther(req.user.id, {
+    title: `FloRish 🤍`,
+    body: `${req.user.displayName} liked a memory`,
+    url: '/gallery',
+  });
   res.json({ action: 'added' });
 });
 
@@ -237,6 +294,11 @@ app.post('/posts/:id/comments', authMiddleware, async (req, res) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+  notifyOther(req.user.id, {
+    title: `FloRish 🤍`,
+    body: `${req.user.displayName}: ${data.text}`,
+    url: '/gallery',
+  });
   res.json({ comment: data });
 });
 
@@ -256,11 +318,9 @@ app.get('/profile', authMiddleware, async (req, res) => {
 app.post('/profile/avatar', authMiddleware, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file' });
-    const b64    = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-    const result = await cloudinary.uploader.unsigned_upload(b64, process.env.CLOUDINARY_UPLOAD_PRESET, {
-      resource_type: 'image',
-      transformation: [{ width: 200, height: 200, crop: 'fill', gravity: 'face' }]
-    });
+    if (!req.file.mimetype.startsWith('image')) return res.status(400).json({ error: 'Image only' });
+    const result = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
+    avatarCache[req.user.id] = result.secure_url;
     await supabase.from('profiles').upsert({ user_id: req.user.id, avatar_url: result.secure_url, updated_at: new Date() }, { onConflict: 'user_id' });
     res.json({ avatar_url: result.secure_url });
   } catch (err) {
@@ -273,7 +333,7 @@ app.post('/profile/avatar', authMiddleware, upload.single('file'), async (req, r
 app.get('/messages', authMiddleware, async (req, res) => {
   const { data, error } = await supabase
     .from('messages')
-    .select('*')
+    .select('*, message_reactions(*)')
     .order('created_at', { ascending: true })
     .limit(200);
   if (error) return res.status(500).json({ error: error.message });
@@ -288,24 +348,66 @@ app.post('/messages', authMiddleware, upload.single('file'), async (req, res) =>
     if (req.file) {
       const result = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
       mediaUrl  = result.secure_url;
-      mediaType = req.file.mimetype.startsWith('video') ? 'video' : 'image';
+      mediaType = mediaKind(req.file.mimetype);
     }
     if (!text?.trim() && !mediaUrl) return res.status(400).json({ error: 'Empty message' });
     const { data, error } = await supabase
       .from('messages')
       .insert({ user_id: req.user.id, username: req.user.displayName, text: text?.trim() || null, media_url: mediaUrl, media_type: mediaType })
-      .select().single();
+      .select('*, message_reactions(*)').single();
     if (error) throw error;
-    pushToOther(req.user.id, {
+    const preview = data.text
+      || (data.media_type === 'audio' ? '🎤 Sent a voice note' : data.media_type === 'video' ? '🎥 Sent a video' : '📸 Sent a photo');
+    notifyOther(req.user.id, {
       title: `${req.user.displayName} 🤍`,
-      body: data.text || '📸 Sent a photo',
-      url: '/chat'
+      body: preview,
+      url: '/chat',
     });
     res.json({ message: data });
   } catch (err) {
     console.error('POST /messages error:', JSON.stringify(err));
     res.status(500).json({ error: err.message || 'Failed' });
   }
+});
+
+/* ── REACT TO MESSAGE ── */
+app.post('/messages/:id/react', authMiddleware, async (req, res) => {
+  const emoji = (req.body.emoji || '').trim();
+  if (!emoji) return res.status(400).json({ error: 'No emoji' });
+
+  const { data: existing } = await supabase
+    .from('message_reactions')
+    .select('id, emoji')
+    .eq('message_id', req.params.id)
+    .eq('user_id', req.user.id)
+    .maybeSingle();
+
+  if (existing && existing.emoji === emoji) {
+    await supabase.from('message_reactions').delete().eq('id', existing.id);
+    return res.json({ action: 'removed' });
+  }
+
+  if (existing) {
+    await supabase.from('message_reactions').update({ emoji, username: req.user.displayName }).eq('id', existing.id);
+  } else {
+    const { error } = await supabase.from('message_reactions').insert({
+      message_id: req.params.id,
+      user_id: req.user.id,
+      username: req.user.displayName,
+      emoji,
+    });
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  const { data: msg } = await supabase.from('messages').select('user_id').eq('id', req.params.id).single();
+  if (msg && msg.user_id !== req.user.id) {
+    notifyOther(req.user.id, {
+      title: `${req.user.displayName} 🤍`,
+      body: `Reacted ${emoji} to your message`,
+      url: '/chat',
+    });
+  }
+  res.json({ action: 'added', emoji });
 });
 
 /* ── DELETE COMMENT ── */

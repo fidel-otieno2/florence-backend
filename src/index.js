@@ -129,7 +129,7 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
     res.json({ post: data });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Upload failed' });
+    res.status(500).json({ error: err.message || 'Upload failed' });
   }
 });
 

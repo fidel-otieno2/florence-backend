@@ -7,6 +7,7 @@ const multer       = require('multer');
 const cloudinary   = require('cloudinary').v2;
 const { createClient } = require('@supabase/supabase-js');
 const rateLimit    = require('express-rate-limit');
+const migrate      = require('./migrate');
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -257,7 +258,8 @@ app.delete('/comments/:id', authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await migrate();
   console.log(`API running on port ${PORT} 🤍`);
   console.log('Cloudinary cloud:', process.env.CLOUDINARY_CLOUD_NAME || 'MISSING');
   console.log('Supabase URL:', process.env.SUPABASE_URL ? 'set' : 'MISSING');

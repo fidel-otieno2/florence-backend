@@ -80,15 +80,9 @@ const upload = multer({
 });
 
 function uploadToCloudinary(buffer, mimetype) {
-  return new Promise((resolve, reject) => {
-    const resourceType = mimetype.startsWith('video') ? 'video' : 'image';
-    console.log('Cloudinary upload attempt — cloud:', process.env.CLOUDINARY_CLOUD_NAME, 'key:', process.env.CLOUDINARY_API_KEY?.slice(0,6));
-    const stream = cloudinary.uploader.upload_stream(
-      { resource_type: resourceType },
-      (err, result) => err ? reject(err) : resolve(result)
-    );
-    stream.end(buffer);
-  });
+  const resourceType = mimetype.startsWith('video') ? 'video' : 'image';
+  const b64 = `data:${mimetype};base64,${buffer.toString('base64')}`;
+  return cloudinary.uploader.upload(b64, { resource_type: resourceType });
 }
 
 /* ═══════════════════════════════════════════

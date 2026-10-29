@@ -7,6 +7,7 @@ const multer       = require('multer');
 const cloudinary   = require('cloudinary').v2;
 const { createClient } = require('@supabase/supabase-js');
 const rateLimit    = require('express-rate-limit');
+const webpush      = require('web-push');
 const migrate      = require('./migrate');
 
 const app  = express();
@@ -24,6 +25,26 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
+
+/* ═══ WEB PUSH ═══ */
+webpush.setVapidDetails(
+  'mailto:fidelmartins05@gmail.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+async function pushToOther(senderUserId, payload) {
+  const otherId = senderUserId === 'fidel' ? 'florence' : 'fidel';
+  const { data } = await supabase.from('push_subscriptions').select('subscription').eq('user_id', otherId).single();
+  if (!data) return;
+  try {
+    await webpush.sendNotification(data.subscription, JSON.stringify(payload));
+  } catch (err) {
+    if (err.statusCode === 410) {
+      await supabase.from('push_subscriptions').delete().eq('user_id', otherId);
+    }
+  }
+}
 
 /* ═══ USERS (no DB — hardcoded, only 2 accounts ever) ═══ */
 const USERS = {
@@ -73,7 +94,20 @@ function uploadToCloudinary(buffer, mimetype) {
    ROUTES
 ═══════════════════════════════════════════ */
 
-/* Health check */
+/* ── VAPID PUBLIC KEY ── */
+app.get('/push/vapid-key', (_, res) => {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY });
+});
+
+/* ── SAVE PUSH SUBSCRIPTION ── */
+app.post('/push/subscribe', authMiddleware, async (req, res) => {
+  const { subscription } = req.body;
+  if (!subscription) return res.status(400).json({ error: 'No subscription' });
+  await supabase.from('push_subscriptions').upsert({ user_id: req.user.id, subscription }, { onConflict: 'user_id' });
+  res.json({ ok: true });
+});
+
+/* ── HEALTH CHECK ── */
 app.get('/', (_, res) => res.json({ status: 'Florence & Fidel API running 🤍' }));
 
 /* ── LOGIN ── */
@@ -128,6 +162,11 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
       .single();
 
     if (error) throw error;
+    pushToOther(req.user.id, {
+      title: `FloRish 🤍`,
+      body: `${req.user.displayName} posted a new memory`,
+      url: '/gallery'
+    });
     res.json({ post: data });
   } catch (err) {
     console.error('POST /posts error:', JSON.stringify(err));
@@ -236,6 +275,11 @@ app.post('/messages', authMiddleware, upload.single('file'), async (req, res) =>
       .insert({ user_id: req.user.id, username: req.user.displayName, text: text?.trim() || null, media_url: mediaUrl, media_type: mediaType })
       .select().single();
     if (error) throw error;
+    pushToOther(req.user.id, {
+      title: `${req.user.displayName} 🤍`,
+      body: data.text || '📸 Sent a photo',
+      url: '/chat'
+    });
     res.json({ message: data });
   } catch (err) {
     console.error('POST /messages error:', JSON.stringify(err));

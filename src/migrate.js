@@ -40,10 +40,18 @@ const SQL = `
     created_at timestamptz DEFAULT now()
   );
 
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    text NOT NULL UNIQUE,
+    subscription jsonb NOT NULL,
+    created_at timestamptz DEFAULT now()
+  );
+
   ALTER TABLE posts     DISABLE ROW LEVEL SECURITY;
   ALTER TABLE reactions DISABLE ROW LEVEL SECURITY;
   ALTER TABLE comments  DISABLE ROW LEVEL SECURITY;
   ALTER TABLE messages  DISABLE ROW LEVEL SECURITY;
+  ALTER TABLE push_subscriptions DISABLE ROW LEVEL SECURITY;
 
   DO $$ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE posts;

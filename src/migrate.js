@@ -30,6 +30,12 @@ const SQL = `
     created_at timestamptz DEFAULT now()
   );
 
+  CREATE TABLE IF NOT EXISTS profiles (
+    user_id    text PRIMARY KEY,
+    avatar_url text,
+    updated_at timestamptz DEFAULT now()
+  );
+
   CREATE TABLE IF NOT EXISTS messages (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    text NOT NULL,
@@ -52,6 +58,7 @@ const SQL = `
   ALTER TABLE comments  DISABLE ROW LEVEL SECURITY;
   ALTER TABLE messages  DISABLE ROW LEVEL SECURITY;
   ALTER TABLE push_subscriptions DISABLE ROW LEVEL SECURITY;
+  ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 
   DO $$ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE posts;

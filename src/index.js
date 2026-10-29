@@ -240,6 +240,35 @@ app.post('/posts/:id/comments', authMiddleware, async (req, res) => {
   res.json({ comment: data });
 });
 
+/* ── GET ALL PROFILES ── */
+app.get('/profiles', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('profiles').select('*');
+  res.json({ profiles: data || [] });
+});
+
+/* ── GET PROFILE ── */
+app.get('/profile', authMiddleware, async (req, res) => {
+  const { data } = await supabase.from('profiles').select('*').eq('user_id', req.user.id).single();
+  res.json({ profile: data || { user_id: req.user.id, avatar_url: null } });
+});
+
+/* ── UPLOAD AVATAR ── */
+app.post('/profile/avatar', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file' });
+    const b64    = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+    const result = await cloudinary.uploader.unsigned_upload(b64, process.env.CLOUDINARY_UPLOAD_PRESET, {
+      resource_type: 'image',
+      transformation: [{ width: 200, height: 200, crop: 'fill', gravity: 'face' }]
+    });
+    await supabase.from('profiles').upsert({ user_id: req.user.id, avatar_url: result.secure_url, updated_at: new Date() }, { onConflict: 'user_id' });
+    res.json({ avatar_url: result.secure_url });
+  } catch (err) {
+    console.error('avatar upload error:', JSON.stringify(err));
+    res.status(500).json({ error: err.message || 'Failed' });
+  }
+});
+
 /* ── GET MESSAGES ── */
 app.get('/messages', authMiddleware, async (req, res) => {
   const { data, error } = await supabase

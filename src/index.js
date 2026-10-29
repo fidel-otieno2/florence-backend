@@ -31,6 +31,7 @@ const USERS = {
 };
 
 /* ═══ MIDDLEWARE ═══ */
+app.set('trust proxy', 1);
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -128,7 +129,7 @@ app.post('/posts', authMiddleware, upload.single('file'), async (req, res) => {
     if (error) throw error;
     res.json({ post: data });
   } catch (err) {
-    console.error(err);
+    console.error('POST /posts error:', JSON.stringify(err));
     res.status(500).json({ error: err.message || 'Upload failed' });
   }
 });
@@ -222,4 +223,10 @@ app.delete('/comments/:id', authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-app.listen(PORT, () => console.log(`API running on port ${PORT} 🤍`));
+app.listen(PORT, () => {
+  console.log(`API running on port ${PORT} 🤍`);
+  console.log('Cloudinary cloud:', process.env.CLOUDINARY_CLOUD_NAME || 'MISSING');
+  console.log('Supabase URL:', process.env.SUPABASE_URL ? 'set' : 'MISSING');
+  console.log('JWT secret:', process.env.JWT_SECRET ? 'set' : 'MISSING');
+  console.log('Fidel hash:', process.env.FIDEL_PASSWORD_HASH ? 'set' : 'MISSING');
+});
